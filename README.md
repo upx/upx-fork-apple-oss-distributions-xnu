@@ -1,3 +1,14 @@
+FORK WARNING
+============
+
+This repository is a fork of
+https://github.com/apple-oss-distributions/xnu.git
+
+The goal of this fork is to provide reliable and deterministic/reproducible builds
+of the XNU kernel using GitHub Actions workflows.
+
+Original upstream README follows. END OF FORK WARNING.
+
 What is XNU?
 ===========
 
