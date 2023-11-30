@@ -1,0 +1,117 @@
+# Copyright (C) Markus Franz Xaver Johannes Oberhumer
+
+# TODO / FIXME: it seems essential defines like CONFIG_MIN_NBUF and
+#   CONFIG_MAX_THREADS are missing; do we have to run a special "config" step?
+
+# TODO / FIXME: how can we disable the usage of non-public <TrustCache/API.h> ??
+
+name: 'Build XNU 23.1.0'
+
+on: [push, workflow_dispatch]
+
+jobs:
+  job-build-xnu-23-on-macos-13:
+    if: true
+    name: 'Build XNU 23.1.0 on macos-13'
+    runs-on: macos-13
+    defaults: {'run': {'shell': 'zsh -e -o pipefail {0}'}} # NOTE: use zsh as default shell!
+    steps:
+      - name: 'Install brew packages'
+        run: |
+          # only run "brew update" if needed
+          packages=(coreutils ninja)
+          if ! brew install $packages; then brew update && brew install $packages; fi
+          # list brew packages
+          echo "===== brew leaves:"; brew leaves; echo "===== brew list:"; brew list --versions
+
+      - name: 'Inspect environment'
+        run: |
+          uname -a; pwd; id; umask
+          xcodebuild -version
+          echo; echo -n "clang version: "; clang --version
+          echo; echo -n "gcc version: "; gcc --version
+          echo; echo -n "ld version: "; ld -version_details
+          echo; echo "PATH=$PATH"
+          env | LC_ALL=C sort
+
+      - name: 'Check out code'
+        run: |
+          mkdir -p -v ~/bin ~/packages ~/src
+          cd ~/src
+          # TODO: which branches should we use?
+          git clone --branch main --depth 1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" xnu
+          git clone --branch main --depth 1 https://github.com/apple-oss-distributions/AvailabilityVersions.git AvailabilityVersions
+          git clone --branch main --depth 1 https://github.com/apple-oss-distributions/dtrace.git dtrace
+          git clone --branch main --depth 1 https://github.com/apple-oss-distributions/libdispatch.git libdispatch
+
+      - name: 'Build and install AvailabilityVersions'
+        run: |
+          cd ~/src/AvailabilityVersions
+          # TODO later: do not hardcode this value
+          DSTROOT=/Applications/Xcode_14.3.1.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX13.3.sdk
+          make DSTROOT="$DSTROOT"
+          sudo make DSTROOT="$DSTROOT" install
+
+      - name: 'Build and install libdispatch'
+        if: false # does not build
+        run: |
+          cd ~/src/libdispatch
+          mkdir build; cd build
+          DSTROOT=~/packages/libdispatch
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DSTROOT" -DBUILD_TESTING=OFF
+          make -j
+          make install
+
+      - name: 'Patch XNU source'
+        run: |
+          cd ~/src/xnu
+          # TODO / FIXME: how can we disable the usage of non-public <TrustCache/API.h> ??
+          #
+          # patch makedefs
+          #
+          cp -ai makedefs makedefs.ORIG; cd makedefs
+          # patch SUPPORTED_PLATFORMS
+          sed -i.bak -e 's/ExclaveKit ExclaveCore //' MakeInc.cmd
+          # disable incredibly noisy warnings; is upstream **really** using these flags??
+          flags=( -Wno-four-char-constants -Wno-null-pointer-subtraction -Wno-unused-but-set-variable )
+          sed -i.bak -e "s/-Wno-error=declaration-after-statement/-Wno-declaration-after-statement $flags/" MakeInc.def
+          # disable some noisy C++ warnings
+          flags=( -Wno-suggest-destructor-override -Wno-suggest-override )
+          sed -i.bak -e "s/-Wno-old-style-cast/-Wno-old-style-cast $flags/" MakeInc.def
+          cd ..; diff -ur makedefs.ORIG makedefs || true
+          #
+          # copy missing files from libdispatch
+          #
+          cp -ai -v ../libdispatch/os/firehose_buffer_private.h libkern/os/
+
+      - name: 'Build XNU'
+        run: |
+          cd ~/src/xnu
+          config=()
+          config+=( ARCH_CONFIGS="X86_64" )
+          #config+=( ARCH_CONFIGS="X86_64 ARM64" )
+          config+=( CONFIG_DEFINES="-DOS_FIREHOSE_SPI" )
+          config+=( KERNEL_CONFIGS=DEVELOPMENT )
+          #config+=( KERNEL_CONFIGS=RELEASE )
+          config+=( LOGCOLORS=y )
+          config+=( RC_DARWIN_KERNEL_VERSION=23.1.0 )   # XNU 23
+          config+=( SDKROOT=macosx )
+          config+=( SUPPORTED_PLATFORMS="MacOSX" )      # override
+          config+=( TIGHTBEAMC=nothx )
+          config+=( USE_WERROR=0 )
+          ##make -C config SRCROOT="$PWD" $config
+          # use "make -k" to keep going and build as much as possible
+          # TODO later: use "make -j" for parallel build; but this makes the log confusing
+          make -k -j1 $config |& tee xnu-23-build.log
+
+      # HINT: use "less -R" to view the build log with colors
+      - name: 'Upload xnu-23-build.log'
+        if: success() || failure() # run this step even if the previous step failed
+        uses: actions/upload-artifact@v3
+        with:
+          name: xnu-23-build-log-artifact
+          path: /Users/runner/src/xnu/xnu-23-build.log
+
+# TODO later once this thing builds:
+#     - name: 'Make kernel artifact'
+#     - name: ${{ format('Upload artifact {0}', env.artifact_name) }}
