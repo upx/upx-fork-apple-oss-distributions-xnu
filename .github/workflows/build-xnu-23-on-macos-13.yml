@@ -107,7 +107,7 @@ jobs:
       # HINT: use "less -R" to view the build log with colors
       - name: 'Upload xnu-23-build.log'
         if: success() || failure() # run this step even if the previous step failed
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: xnu-23-build-log-artifact
           path: /Users/runner/src/xnu/xnu-23-build.log
